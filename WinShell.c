@@ -18,7 +18,7 @@ int main()
 	/******************************声明程序中用到的函数**************************************/
 
 	void cd_cmd(char *dir);                     /*显示cd命令*/
-	void dir_cmd(char *dir);                    /*显示dir命令*/
+	void dir_cmd(char *dir,char kind);                    /*显示dir命令*/
 	void ftime(FILETIME filetime);              /*显示文件创建时间*/
 	void GetProcessList();                      /*获得系统当前进程列表*/
 	void history_cmd();                         /*获得最近输入的命令*/
@@ -27,6 +27,7 @@ int main()
     BOOL killProcess(char *pid);                /*kill进程*/
     BOOL WINAPI ConsoleHandler(DWORD CEvent);   /*回调函数*/
 	void help();                                /*显示帮助信息*/
+	void transfer(unsigned long size);          /*dir/c转换size*/
 
 	char c, *input, *arg[2], path[BUFSIZE];
 	int input_len = 0, is_bg = 0, i, j, k;
@@ -56,8 +57,7 @@ int main()
 		else
 			/*输出当前目录*/
 			printf("%s>", path);
-		
-			
+
 		/************************************输入***********************************************/
 		
 		input_len = 0;
@@ -81,11 +81,146 @@ int main()
 		/************************************解析指令********************************************/
 		
 		// TODO: 对输入命令进行解析，并存储到字符串数组中
-		
+		for(i=0,j=0,k=0;i<input_len;i++)
+		{
+			if(input[i]==' '||input[i]=='\0')
+			{
+				if(j==0)
+					continue;
+				else
+				{
+					buf[j++]='\0';
+					arg[k]=(char*)malloc(sizeof(char)*j);
+					strcpy(arg[k++],buf);
+					j=0;
+				}
+			}
+			else
+			{
+			buf[j++]=input[i];
+			}
+			
+		}
+
 
 		/*********************************内部命令处理******************************************/
-
+      
 		// TODO: 根据解析结果，进入相应的命令处理函数
+		/*cd 命令*/
+		if(strcmp(arg[0],"cd")==0)
+		{
+			add_history(input);
+            cd_cmd(arg[1]);
+			free(input);
+			continue;
+		}
+
+		/*dir 命令*/
+		if(strcmp(arg[0],"dir")==0||strcmp(arg[0],"dir/A")==0||strcmp(arg[0],"dir/B")==0||strcmp(arg[0],"dir/C")==0)
+		{
+			char kind='A';
+            char *route;
+			add_history(input);
+			if(strcmp(arg[0],"dir/B")==0)
+				kind='B';
+			else if(strcmp(arg[0],"dir/C")==0)
+				kind='C';
+			if(arg[1]==NULL) /*没有输入dir目录参数，dir目录为当前目录*/
+			{
+				route=path;
+				dir_cmd(route,kind);
+			}
+			else
+				dir_cmd(arg[1],kind);
+			free(input);
+			continue;
+		}
+
+		/*tasklist 命令*/
+		if(strcmp(arg[0],"tasklist")==0)
+		{
+			add_history(input);
+			GetProcessList();
+			free(input);
+			continue;
+		}
+
+		/*前台进程*/
+        if(strcmp(arg[0],"fp")==0)
+		{
+			add_history(input);
+			if(arg[1]==NULL)
+			{
+				printf("没有指定可执行文件\n");
+				free(input);
+				continue;
+			}
+			is_bg=0;
+			hprocess=process(is_bg,arg[1]);
+			if(WaitForSingleObject(hprocess,INFINITE)==WAIT_OBJECT_0)
+				free(input);
+			continue; 
+		}
+
+		/*后台进程*/
+		if(strcmp(arg[0],"bg")==0)
+		{
+			add_history(input);
+			if(arg[1]==NULL)
+			{
+				printf("没有指定可执行文件\n");
+				free(input);
+				continue;
+			}
+			is_bg=1;
+			process(is_bg,arg[1]);
+			free(input);
+			continue;
+		}
+
+		/*kill进程*/
+		if(strcmp(arg[0],"taskkill")==0)
+		{
+			BOOL success;
+			add_history(input);
+			success=killProcess(arg[1]);
+			if(!success)
+				printf("kill process failed!\n");
+			free(input);
+			continue;
+		}
+
+		/*显示历史命令*/
+		if(strcmp(arg[0],"history")==0)
+		{
+			add_history(input);
+			history_cmd();
+			free(input);
+			continue;
+		}
+
+		/*exit 命令*/
+		if(strcmp(arg[0],"exit")==0)
+		{
+			add_history(input);
+			printf("Bye bye!\n");
+			free(input);
+			break;
+		}
+	    
+		/*help 命令*/
+		if(strcmp(arg[0],"help")==0)
+		{
+			add_history(input);
+			help();
+			free(input);
+			continue;
+		}
+		else
+		{
+			printf("please type in correct command!\n");
+			continue;
+		}
 	}	
 }
 
@@ -109,7 +244,7 @@ void cd_cmd(char *route)
 
 /************************************dir命令*********************************************/
 
-void dir_cmd(char *route)
+void dir_cmd(char *route,char kind)
 {
 	
 	WIN32_FIND_DATA FindFileData;                /*将查找到的文件或目录以WIN32_FIND_DATA结构返回*/
@@ -198,11 +333,19 @@ void dir_cmd(char *route)
 		/*将结构体中数据的创建时间、类型、大小、名称等信息依次输出*/
 		while(p != NULL)
 		{
-			ftime(p->time);
-			if(p->type == 0)
-				printf("\t<DIR>\t\t");
-			else
-				printf("\t\t%9lu", p->size);
+			if(kind!='B')
+			{
+			    ftime(p->time);
+			    if(p->type == 0)
+				    printf("\t<DIR>\t\t");
+		     	else
+				{
+					if(kind!='C')
+			     	printf("\t\t%9lu", p->size);
+					else
+						transfer(p->size);
+				}
+			}
 			printf ("\t%s\n", p->name);		
 			p = p->next;
 		}
@@ -373,7 +516,7 @@ HANDLE process(int bg, char appName[])
 				return NULL;
 		} 
 		/*调用进程相关程序，此处调用一个自己编写的程序,最好有控制台输出，注意路径正确*/
-		CreateProcess(NULL, appName, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
+		CreateProcess(NULL,appName , NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
 		return pi.hProcess;
 		
 	}
@@ -428,11 +571,47 @@ BOOL WINAPI ConsoleHandler(DWORD CEvent)
 	return TRUE;
 }
 
+void transfer(unsigned long size)
+{
+	char c[11];
+	char queue[11];
+    int number=0;
+	int i=0,j=0;
+	if(size==0)
+    {
+		printf("\t\t%9lu",size);
+		return;
+	}
+    while(size!=0)
+	{
+        queue[++number]=(char)(size%10+48);
+		size/=10;
+		if(number%3==0)
+			queue[++number]=',';
+	}
+	if(queue[number]==',')
+		number--;
+    for(i=number;i>=1;i--)
+	{
+		c[j]=queue[i];
+		j++;
+	}
+	c[j]='\0';
+	printf("\t\t%9s",c);
+}
 
 /***********************************显示帮助*******************************************/
 
 void help()
 {
 // TODO: 添加必要的注意帮助信息
+	printf("cd:切换当前目录。\n输入形式：cd [drive:][path](cd C:\\temp)  \n注：cd命令以空格为分隔符，区分命令和参数。\n\n");
+    printf("dir:显示目录中的文件和子文件列表。\n输入形式：dir [drive:][path](dir C:\\temp) \n注：dir命令以空格为分隔符，区分命令和参数。\n\n");
+	printf("tasklist:显示系统中当前的进程信息。\n输入形式：tasklist\n\n");
+	printf("fp:创建进程并在前台执行。\n输入形式：fp\n\n");
+	printf("bg:创建进程并在后台执行。\n输入形式：bg\n\n");
+	printf("taskkill:终止进程。\n输入形式：taskkill [pid]\n注：taskkill命令以空格为分隔符，pid为进程id。\n\n");
+	printf("history:显示历史命令。\n输入形式：history\n\n");
+	printf("exit:退出\n输入形式：exit\n\n");
 }
 
