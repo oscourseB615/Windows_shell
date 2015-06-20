@@ -11,7 +11,9 @@
 #include <direct.h>
 #include "WinShell.h"
 
-
+HANDLE for_bg;            //后台进程
+HANDLE for_fp;            //前台进程 
+HANDLE wait_sig[2];
           
 int main()
 {
@@ -28,16 +30,25 @@ int main()
     BOOL WINAPI ConsoleHandler(DWORD CEvent);   /*回调函数*/
 	void help();                                /*显示帮助信息*/
 	void transfer(unsigned long size);          /*dir/c转换size*/
+	void pipe(char appName1[],char appName2[]); /*pipe*/
+	void susp(int id);
+	void resp(int id);
 
-	char c, *input, *arg[2], path[BUFSIZE];
+	char c, *input, *arg[3], path[BUFSIZE];
 	int input_len = 0, is_bg = 0, i, j, k;
 	HANDLE hprocess;              /*进程执行结束，返回进程句柄*/
 	DWORD dwRet;
-
+    wait_sig[1] = CreateEvent(NULL,TRUE,FALSE,NULL);
+    /*设置钩子，捕捉ctrl+c命令，收到即结束进程*/		
+		if(SetConsoleCtrlHandler((PHANDLER_ROUTINE)ConsoleHandler,TRUE) == FALSE)
+		{
+			printf("Unable to install handler!\n");
+				return NULL;
+		} 
 	while(1)
 	{    
 		/*将指向输入命令的指针数组初始化*/
-		for(i= 0; i < 2; i++)
+		for(i= 0; i < 3; i++)
 			arg[i] = NULL;
 		/*获得当前目录，返回的地址存入“path”中，BUFSIZE是最多能够保存的地址长度*/
 		dwRet = GetCurrentDirectory(BUFSIZE, path);
@@ -63,21 +74,22 @@ int main()
 		input_len = 0;
 		/*将无用字符过滤掉*/
 		while((c = getchar()) ==  ' ' || c == '\t' || c == EOF)
-			;	
+		{
+		}
 		if(c == '\n')                   /*输入为空时结束本次循环打印提示符*/
 			continue;
 		while(c != '\n')
 		{
 			buf[input_len++] = c;
 			c = getchar();
+			
 		}
 		buf[input_len++] =  '\0';       /*加上串结束符*/
 		
 		/*分配动态存储空间，将命令从缓存复制到input中*/
 		input = (char*) malloc(sizeof(char)*(input_len));
 		strcpy(input, buf);
-		
-
+ 
 		/************************************解析指令********************************************/
 		
 		// TODO: 对输入命令进行解析，并存储到字符串数组中
@@ -157,7 +169,10 @@ int main()
 			}
 			is_bg=0;
 			hprocess=process(is_bg,arg[1]);
-			if(WaitForSingleObject(hprocess,INFINITE)==WAIT_OBJECT_0)
+			for_fp=hprocess;
+			wait_sig[0]=hprocess;
+			//if(WaitForSingleObject(hprocess,INFINITE)==WAIT_OBJECT_0)
+				if(WaitForMultipleObjects(2,wait_sig,FALSE,-1)==WAIT_OBJECT_0)
 				free(input);
 			continue; 
 		}
@@ -173,7 +188,9 @@ int main()
 				continue;
 			}
 			is_bg=1;
-			process(is_bg,arg[1]);
+			hprocess=process(is_bg,arg[1]);
+			for_bg=hprocess;
+		
 			free(input);
 			continue;
 		}
@@ -213,6 +230,24 @@ int main()
 		{
 			add_history(input);
 			help();
+			free(input);
+			continue;
+		}
+		
+        /*后台转前台*/
+		if(strcmp(arg[0],"tofp")==0)
+		{
+			add_history(input);
+			if(WaitForSingleObject(for_bg,INFINITE)==WAIT_OBJECT_0)
+            free(input);
+			continue;
+		}
+		/*pipe*/
+		if(arg[1]!=NULL&&strcmp(arg[1],"|")==0)
+		{
+			add_history(input);
+			if(arg[2]!=NULL)
+			pipe(arg[0],arg[2]);
 			free(input);
 			continue;
 		}
@@ -516,7 +551,8 @@ HANDLE process(int bg, char appName[])
 				return NULL;
 		} 
 		/*调用进程相关程序，此处调用一个自己编写的程序,最好有控制台输出，注意路径正确*/
-		CreateProcess(NULL,appName , NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
+		CreateProcess(NULL,appName , NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL, NULL, &si, &pi);
+		//pid_for_bg=pi.dwProcessId;
 		return pi.hProcess;
 		
 	}
@@ -528,7 +564,8 @@ HANDLE process(int bg, char appName[])
 		/*隐藏窗口*/
 		si.wShowWindow = SW_HIDE;
 		CreateProcess(NULL, appName, NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL, NULL, &si, &pi);	
-		return NULL;
+		//pid_for_fg=pi.dwProcessId;
+		return pi.hProcess;
 	}
 }
 
@@ -543,7 +580,7 @@ BOOL killProcess(char *pid)
 	id = atoi(pid);
 	hprocess = OpenProcess(PROCESS_TERMINATE, FALSE, id);
 	GetExitCodeProcess(hprocess, &dwExitStatus); 
-	if(i = TerminateProcess(hprocess, dwExitStatus))
+	if(i == TerminateProcess(hprocess, dwExitStatus))
 		return TRUE;
 	else 
 		return FALSE;
@@ -554,13 +591,18 @@ BOOL killProcess(char *pid)
 
 BOOL WINAPI ConsoleHandler(DWORD CEvent)
 {
+
 	switch(CEvent)
 	{
 		
-	case CTRL_C_EVENT:                        /*由系统处理事件，包括ctrl+c等*/		
+	case CTRL_C_EVENT:                        /*由系统处理事件，包括ctrl+c等*/	
+		{
+			printf("....\n");
+			PulseEvent(wait_sig[1]);  
 		break;
-	case CTRL_BREAK_EVENT:		
-		break;
+		}
+    case CTRL_BREAK_EVENT:
+	    break;
 	case CTRL_CLOSE_EVENT:		
 		break;
 	case CTRL_LOGOFF_EVENT:		
@@ -614,4 +656,57 @@ void help()
 	printf("history:显示历史命令。\n输入形式：history\n\n");
 	printf("exit:退出\n输入形式：exit\n\n");
 }
+
+/***********************************pipe*******************************************/
+void pipe(char appName1[],char appName2[])
+{
+    HANDLE hRead1,hRead2,hWrite1,hWrite2;
+	STARTUPINFO         si;
+    PROCESS_INFORMATION pi;
+    char szReadBuf[100];
+    DWORD nReadNum;
+    BOOL bRet;
+	HANDLE hTemp=GetStdHandle(STD_OUTPUT_HANDLE);
+
+	SECURITY_ATTRIBUTES sa;
+	sa.bInheritHandle=TRUE;    //必须为TRUE，父进程的读写句柄可以被子进程继承
+    sa.lpSecurityDescriptor=NULL;
+    sa.nLength=sizeof(SECURITY_ATTRIBUTES);
+
+	//创建匿名管道
+	bRet = CreatePipe(&hRead1,&hWrite1,&sa,0);
+	bRet = CreatePipe(&hRead2,&hWrite2,&sa,0);
+
+	//获取STARTUPINFO结构体信息
+    GetStartupInfo( &si );
+    //设置STARTUPINFO的标准输出到管道入口，要使标准输入输出有效，必须指定STARTF_USESTDHANDLES
+    si.dwFlags=STARTF_USESTDHANDLES;
+    si.hStdOutput=hWrite1;
+    si.hStdError=hWrite1;
+
+	//创建子进程
+    bRet = CreateProcess( NULL, appName1, NULL, NULL, TRUE,0, NULL, NULL, &si, &pi);
+    
+	CloseHandle( hWrite1 );
+
+	GetStartupInfo( &si );
+	si.dwFlags=STARTF_USESTDHANDLES;
+    si.hStdInput=hRead1;
+	si.hStdOutput=hWrite2;
+    si.hStdError=hWrite2;
+
+	bRet = CreateProcess( NULL, appName2, NULL, NULL, TRUE,0, NULL, NULL, &si, &pi);
+
+	CloseHandle( hWrite2 );
+
+	//读取管道中的数据
+	
+    while ( ReadFile( hRead2, szReadBuf, 100, &nReadNum, NULL) )
+    {
+        szReadBuf[nReadNum] = '\0';
+        printf( "%s\n", szReadBuf);
+    }
+	return;
+}
+
 
